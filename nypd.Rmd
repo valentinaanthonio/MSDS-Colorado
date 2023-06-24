@@ -1,0 +1,191 @@
+---
+title: "nypd_report.Rmd"
+author: "Valentina Anthonio"
+date: "2023-06-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data Science as Field NYPD SHOOTING INCIDENT DATA project
+This report presents the findings from the [nypd shooting data](https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD) which covers shooting incidences of five different boroughs spanning from January 01 2006 to December 31 2022. The report focuses on the the distribution of cases by the hour, location and gender distribution.
+```{r, echo=TRUE}
+library(tidyverse)
+library(lubridate)
+library(gridExtra)
+library(dplyr)
+library(knitr)
+library(magrittr)
+library(ggtext)
+library(ggpie)
+```
+## Data Sources
+### Import data
+The data used for this analysis was extracted from [DATA.GOV](https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD)
+```{r,echo=TRUE}
+url_in <-"https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+df_ny <-read_csv(url_in)
+```
+
+
+### Data Cleaning and Exploration 
+```{r, echo=TRUE}
+head(df_ny,5)
+```
+
+```{r, echo=TRUE}
+#drop some columns from the data 
+df_ny <- df_ny %>% select(-c(INCIDENT_KEY,PRECINCT,JURISDICTION_CODE,LOC_OF_OCCUR_DESC,LOC_CLASSFCTN_DESC,X_COORD_CD,Y_COORD_CD,Latitude,Longitude,Lon_Lat))
+```
+
+```{r, echo=TRUE}
+#replace n/a values with unknown
+df_ny <- df_ny %>% replace_na(list(PERP_AGE_GROUP="Unknown",PERP_SEX="Unknown", PERP_RACE="Unknown", VIC_AGE_GROUP="Unknown",VIC_SEX="Unknown", VIC_RACE="Unknown",LOCATION_DESC="Unknown"))
+```
+
+```{r echo=TRUE}
+#merge n/a, null and unknown values into one. 
+df_ny$PERP_AGE_GROUP = recode(df_ny$PERP_AGE_GROUP, UNKNOWN ="Unknown")
+df_ny$PERP_AGE_GROUP = recode(df_ny$PERP_AGE_GROUP,"(null)" = "Unknown")
+df_ny$PERP_AGE_GROUP = recode(df_ny$PERP_AGE_GROUP, "N/A" = "Unknown")
+df_ny$VIC_AGE_GROUP = recode(df_ny$VIC_AGE_GROUP, UNKNOWN = "UnKnown")
+df_ny$VIC_AGE_GROUP = as.factor(df_ny$VIC_AGE_GROUP)
+df_ny$PERP_SEX = recode(df_ny$PERP_SEX,"(null)" = "Unknown")
+df_ny$VIC_RACE = recode(df_ny$VIC_RACE,UNKNOWN ="Unknown")
+df_ny$LOCATION_DESC = recode(df_ny$LOCATION_DESC,"(null)" = "Unknown")
+
+# convert TRUE/FALSE to 1 and 0
+df_ny$STATISTICAL_MURDER_FLAG[df_ny$STATISTICAL_MURDER_FLAG=="TRUE"] <-1
+df_ny$STATISTICAL_MURDER_FLAG[df_ny$STATISTICAL_MURDER_FLAG =="FALSE"]<- 0
+
+#convert date column of date formate
+df_ny$OCCUR_DATE <- mdy(df_ny$OCCUR_DATE)
+df_ny$OCCUR_TIME <- hour(hms(as.character(df_ny$OCCUR_TIME)))
+
+#rename columns
+df_ny <- df_ny %>% rename(DATE = OCCUR_DATE,
+                      TIME = OCCUR_TIME)
+head(df_ny)
+```
+
+```{r echo=TRUE}
+# get the age groupings of victims and perpetrators 
+table(df_ny$VIC_AGE_GROUP)
+table(df_ny$PERP_AGE_GROUP)
+
+#drop the outliers in the age groups
+df_ny <- df_ny[!(df_ny$PERP_AGE_GROUP ==1020 ),]
+df_ny <- df_ny[!(df_ny$PERP_AGE_GROUP ==940 ),]
+df_ny <- df_ny[!(df_ny$PERP_AGE_GROUP ==224 ),]
+df_ny <- df_ny[!(df_ny$VIC_AGE_GROUP ==1022),]
+
+
+table(df_ny$VIC_AGE_GROUP)
+table(df_ny$PERP_AGE_GROUP)
+``` 
+
+
+
+### Data Exploration
+```{r echo=TRUE}
+#plot data points 
+#get cases group by sex
+shooting <- df_ny %>% group_by(BORO) %>% summarize(incidents = n())
+
+ggplot(shooting,aes(reorder(BORO,-incidents), y= incidents, fill=BORO)) +geom_bar(stat = "identity",position = "dodge") + xlab("Borough") + ylab("# of Cases") +
+  ggtitle("# of Shooting by Borough") +theme(plot.title = element_text(hjust = 0.5), axis.text.y = element_text(vjust= 2), axis.title.x = element_text(vjust = -1), legend.text = element_markdown(margin=margin(t=10, b=10, unit="pt")))  
+```
+
+From the graph above, its evident that most of the shootings took place in the Brooklyn followed by the Bronx with Staten Island being the least. 
+
+```{r, echo=TRUE}
+# get the number of shooting incidents by location 
+table(df_ny$LOCATION_DESC)
+shooting<- df_ny %>%
+  group_by(LOCATION_DESC) %>%
+  reframe(total_shootings =n(), paste(round(total_shootings/(count(df_ny))*100,2), "%")) %>%
+  arrange(desc(total_shootings))
+
+shooting<- shooting %>% rename(percentage = 3)
+
+shooting
+```
+
+58.4% of most shootings had no specific location information but multi dwelling public places had **17.69%** following by multi dwelling apartment of **10.38%**.
+```{r echo=TRUE}
+#check which day of the week has most cases
+defaultW <-getOption("warn")
+options(warning=-1)
+
+# get shooting data by the hour
+df_hour <- df_ny %>%  group_by(TIME) %>% count()
+
+ggplot(df_hour, aes(x=TIME, y=n)) + geom_line(color="red", linewidth=1.2) + labs(x= "Incidence by The Hour", y="# of Incidence") + theme_minimal() + geom_point(color="blue", size=2)+ggtitle("# of Shooting Incidents by The Hour")+theme(plot.title = element_text(hjust=0.5), axis.text.x = element_text(face="bold"), axis.text.y = element_text(vjust= 2, size=10, face="bold"), axis.title.x = element_text(vjust = -1, face="bold"), axis.title.y = element_text(face="bold"), legend.text = element_markdown(margin=margin(t=10, b=10, unit="pt"))) + ylim(0, 2500)+ geom_label(label=rownames(df_hour)) + scale_x_continuous(limits=c(0,24))
+
+```
+
+The number of cases witnessed a significant decline between 2015 and 2020 in the early late hours of the day to midnight as per the graph above. It would be interesting to investigate the reasons behind this decline to assist in future planning for preventing such incidents.
+
+```{r echo=TRUE}
+# perpetrator age distribution
+options(repr.plot.width = 25, repr.plot.height=25)
+
+perp_b<- ggplot(data=df_ny)  +  geom_bar(mapping = aes(x=PERP_AGE_GROUP, fill=PERP_AGE_GROUP), show.legend = FALSE, width=1) + theme(aspect.ratio = 1, plot.title=element_text(hjust=0.5), panel.border = element_blank()) + labs(x=NULL, y=NULL) + coord_polar() + ggtitle("Perpetrator Age Group Distribution") +scale_color_viridis_d()+ scale_fill_viridis_d()
+
+perp_flip <- perp_b + coord_flip()+
+  theme(axis.text.x = element_blank())  + geom_text(aes(x=PERP_AGE_GROUP, label = ..count..), size=3, fontface="bold", stat="count", position = position_stack(vjust = 0.75))
+
+options(repr.plot.width = 25, repr.plot.height=25)
+
+vict_b <- ggplot(data=df_ny) + geom_bar(mapping = aes(x=VIC_AGE_GROUP, fill=VIC_AGE_GROUP),show.legend = FALSE, width=1) + theme(aspect.ratio = 1, plot.title = element_text(hjust=0.5), panel.border = element_blank()) + labs(x=NULL, y=NULL) + coord_polar() + ggtitle("Victim Age Group Distribution") + scale_fill_brewer(palette = "Dark2")
+
+vict_b_flip <- vict_b + coord_flip()+
+  theme(axis.text.x = element_blank())  + geom_text(aes(x=VIC_AGE_GROUP, label = ..count..), size=3, fontface="bold", stat="count", position = position_stack(vjust = 0.75))
+
+grid.arrange(perp_b, vict_b, perp_flip, vict_b_flip, ncol=2)
+```
+With the age group of most perpetrators unknown, significant grouped after this were between the ages of 18-24 and 25-44 with the reverse being the case of victims where most victims were between 25-44 followed by 18-24 with about 61 cases classified as unknown.
+
+
+```{r, echo=TRUE}
+df_ny %>% filter(BORO =='BROOKLYN') %>% ggplot(aes(x = year(DATE), fill = VIC_RACE)) +
+  geom_bar(position = 'dodge') +
+  labs(x = "Year", y = "Count", fill = " VICTIM'S RACE",title= "CASES IN BROOKLYN") + theme(plot.title = element_text(hjust = 0.5))
+```
+```{r, echo=TRUE}
+df_ny %>% filter(BORO =='STATEN ISLAND') %>% ggplot(aes(x = year(DATE), fill = VIC_RACE)) +
+  geom_bar(position = 'dodge') +
+  labs(x = "Year", y = "Count", fill = " VICTIM'S RACE",title= "CASES IN STATEN ISLAND") + theme(plot.title = element_text(hjust = 0.5))
+```
+
+Both graphs represent the locations with the highest and lowest occurrence of cases. It is evident that the majority of victims were Black, followed by White Hispanics.
+
+```{r, echo=TRUE}
+df_ny %>% filter(PERP_SEX =='M') %>% ggplot(aes(x = year(DATE), fill = VIC_SEX)) +
+  geom_bar(position = 'dodge') +
+  labs(x = "Year", y = "Count", fill = " VICTIM'S GENDER",title= "NUMBER OF CASES COMMITTED BY MALE PERPETRATOR'S") + theme(plot.title = element_text(hjust = 0.5))
+```
+```{r, echo=TRUE}
+df_ny %>% filter(PERP_SEX =='M') %>% ggplot(aes(x = year(DATE), fill = BORO)) +
+  geom_bar(position = 'dodge') +
+  labs(x = "Year", y = "Count", fill = " BORO",title= "NUMBER OF CASES COMMITTED BY MALE PERPETRATOR'S") + theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+```{r, echo=TRUE}
+df_ny %>% filter(PERP_RACE=='BLACK') %>% ggplot(aes(x = year(DATE), fill = BORO)) +
+  geom_bar(position = 'dodge') +
+  labs(x = "Year", y = "Count", fill = " BORO",title= "NUMBER OF CASES BY BLACK MALE PERPETRATOR'S") + theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r, echo=TRUE}
+ df_ny %>% filter(PERP_RACE =="BLACK" & PERP_SEX =="M") %>% ggplot(aes(x = year(DATE), fill = VIC_RACE)) +
+  geom_bar(position = 'dodge') +
+  labs(x = "Year", y = "Count", fill = " VICTIM'S RACE",title= "NUMBER OF CASES BY BLACK MALE PERPETRATOR'S") + theme(plot.title = element_text(hjust = 0.5))
+```
+These plots display the distribution of cases involving male perpetrators based on gender and the neighbourhood. The distribution patterns for cases committed by Black males were similar to those for cases committed by males in general.
+
+## Conclusion
+Based on the analysis of the NYPD shooting data, it is evident that most crimes were committed by individuals of Black ethnicity, with the majority of victims being Black males, followed by White Hispanics. The incidents predominantly occurred in Brooklyn and the Bronx during the early and late hours of the day. It's important to note that, any baises in relation to how the data was collected and aggregated would significantly impact this analysis as those could not at the moment be ascertained and corrected. Additionally, this dataset does not account for unlogged or unreported cases, which might impact the narrative of this report. 
